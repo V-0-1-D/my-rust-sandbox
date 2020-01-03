@@ -1,6 +1,5 @@
-use my_rust_sandbox::SandBox;
+use my_rust_sandbox::run;
 
 fn main() {
-    let mut sand_box = SandBox::new();
-    sand_box.run();
+    run();
 }

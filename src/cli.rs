@@ -1,104 +1,146 @@
 use {
-    crate::{SandBox, Worker},
-    std::io::stdin,
+    crate::{Message, SandBox, Worker},
+    clap::ArgMatches,
 };
 
-pub(crate) struct Cli<'a> {
+pub(crate) struct Cli<'a, 'b> {
     sand_box: &'a mut SandBox,
-    cmd: String,
-    args: Vec<String>,
+    matches: ArgMatches<'b>,
 }
 
-impl Cli<'_> {
-    pub fn new(sand_box: &mut SandBox) -> Cli {
-        let cmd = String::new();
-        let args = Vec::new();
-        Cli {
-            sand_box,
-            cmd,
-            args,
-        }
+impl<'a, 'b> Cli<'a, 'b> {
+    pub fn new(sand_box: &'a mut SandBox, matches: ArgMatches<'b>) -> Cli<'a, 'b> {
+        Cli { sand_box, matches }
     }
 
-    pub fn listen(&mut self) {
-        let mut buffer = String::new();
-        println!("Press 'help' to list commands for or 'q' for quit");
-
-        loop {
-            stdin().read_line(&mut buffer).unwrap();
-            match &buffer[..buffer.len() - 1] {
-                "q" => return,
-                cmd => self.handle_root(cmd),
-            }
-            buffer.clear();
-        }
-    }
-
-    fn print_command_not_found(&self) {
-        println!("Command \"{}\" wasn't recognized.", self.cmd)
-    }
-
-    fn handle_root(&mut self, cmd: &str) {
-        self.cmd = cmd.to_owned();
-
-        self.args = cmd
-            .split_whitespace()
-            .map(|arg| arg.to_owned())
-            .collect::<Vec<String>>();
-
-        self.args.reverse();
-        let arg1 = self.args.pop();
-
-        let arg1 = match arg1 {
-            Some(word) => word,
-            None => return,
-        };
-        match &arg1[..] {
-            "help" => print_help(),
+    pub fn run(&mut self, cmd_name: &str) {
+        match cmd_name {
             "thread" => self.handle_thread(),
-            _ => self.print_command_not_found(),
+            _ => (),
         }
     }
 
     fn handle_thread(&mut self) {
-        let arg2 = self.args.pop();
+        let (cmd_name, _) = self.matches.subcommand();
 
-        let arg2 = match arg2 {
-            Some(word) => word,
-            None => return,
-        };
-        match &arg2[..] {
+        match cmd_name {
             "spawn" => self.handle_thread_spawn(),
+            "terminate" => self.handle_thread_terminate(),
             "info" => self.handle_thread_info(),
-            _ => self.print_command_not_found(),
+            "send" => self.handle_thread_message(),
+            _ => (),
         }
     }
 
-    fn handle_thread_spawn(&mut self) {
-        let thread_name = self.args.pop();
+    fn handle_thread_terminate(&mut self) {
+        let (_, cmd) = self.matches.subcommand();
 
-        let thread_name = match thread_name {
-            Some(word) => word,
-            None => {
-                println!("Expected thread name");
-                return;
-            }
+        let name = cmd
+            .unwrap()
+            .args
+            .get("name")
+            .unwrap()
+            .vals
+            .get(0)
+            .unwrap()
+            .clone()
+            .into_string()
+            .unwrap();
+
+        let worker = self.sand_box.workers.remove(&name);
+
+        let worker = match worker {
+            None => return println!("Thread '{}' wasn't found.", name),
+            Some(worker) => worker,
         };
-        self.sand_box.create_worker(thread_name.to_owned());
-        println!("Thread {} created successfully", thread_name);
+        worker.sender.send(Message::Terminate).unwrap();
+        println!("Thread '{}' was terminated.", name);
+    }
+
+    fn handle_thread_message(&mut self) {
+        let (_, cmd) = self.matches.subcommand();
+
+        let name = cmd.unwrap().args.get("name");
+        let message = cmd.unwrap().args.get("message");
+
+        let message = match message {
+            None => return,
+            Some(message) => message,
+        };
+
+        let message = message.vals.get(0).unwrap().clone().into_string().unwrap();
+
+        if let None = name {
+            for (_, worker) in &self.sand_box.workers {
+                let message = message.clone();
+                worker.sender.send(Message::Text(message)).unwrap();
+            }
+            return;
+        }
+        let name = name
+            .unwrap()
+            .vals
+            .get(0)
+            .unwrap()
+            .clone()
+            .into_string()
+            .unwrap();
+
+        let worker = self.sand_box.workers.get(&name);
+
+        let worker = match worker {
+            None => return println!("Thread '{}' wasn't found.", name),
+            Some(worker) => worker,
+        };
+        worker.sender.send(Message::Text(message)).unwrap();
+    }
+
+    fn handle_thread_spawn(&mut self) {
+        let (_, cmd) = self.matches.subcommand();
+
+        let name = cmd
+            .unwrap()
+            .args
+            .get("name")
+            .unwrap()
+            .vals
+            .get(0)
+            .unwrap()
+            .clone()
+            .into_string()
+            .unwrap();
+
+        if self.sand_box.workers.contains_key(&name) {
+            return println!("Thread with name '{}' already exist!", name);
+        }
+
+        self.sand_box.create_worker(name.clone());
+        println!("Thread {} created successfully\n", name);
     }
 
     fn handle_thread_info(&mut self) {
-        let thread_name = self.args.pop();
+        let (_, cmd) = self.matches.subcommand();
 
-        if let Some(thread_name) = thread_name {
-            let worker = self.sand_box.workers.get(&thread_name);
-            if let Some(worker) = worker {
+        let name = cmd.unwrap().args.get("name");
+
+        if let None = name {
+            for (_, worker) in &self.sand_box.workers {
                 Cli::print_thread_info(&worker);
             }
             return;
         }
-        for (_, worker) in &self.sand_box.workers {
+        let name = name
+            .unwrap()
+            .vals
+            .get(0)
+            .unwrap()
+            .clone()
+            .into_string()
+            .unwrap();
+
+        let worker = self.sand_box.workers.get(&name);
+
+        if let Some(worker) = worker {
             Cli::print_thread_info(&worker);
         }
     }
@@ -109,15 +151,4 @@ impl Cli<'_> {
         println!("id: {:?}", thread.id());
         println!("\n");
     }
-}
-
-fn print_help() {
-    println!(
-        "
-COMMANDS:
-
-thread spawn <name>
-thread info [<name>]
-"
-    );
 }
